@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Генератор отчётов</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f5f5f7; margin: 0; padding: 40px 20px; color: #1d1d1f; }
+  .container { max-width: 700px; margin: 0 auto; background: #fff;
+    border-radius: 16px; padding: 48px 40px; box-shadow: 0 4px 24px rgba(0,0,0,0.06); }
+  h1 { font-size: 26px; margin: 0 0 8px; font-weight: 600; }
+  .subtitle { color: #6e6e73; font-size: 15px; margin-bottom: 36px; }
+  .drop-zone { border: 2px dashed #d2d2d7; border-radius: 12px; padding: 48px 20px;
+    text-align: center; cursor: pointer; transition: all 0.2s; background: #fafafa; }
+  .drop-zone:hover { border-color: #0071e3; background: #f0f8ff; }
+  .drop-zone.dragover { border-color: #0071e3; background: #e8f4fd; }
+  .drop-zone.has-file { border-color: #1b6b34; background: #e6f4ea; }
+  .drop-zone input { display: none; }
+  .drop-icon { font-size: 48px; margin-bottom: 12px; }
+  .drop-text { font-size: 16px; color: #1d1d1f; font-weight: 500; }
+  .drop-hint { font-size: 13px; color: #6e6e73; margin-top: 8px; }
+  .file-info { font-size: 14px; color: #1b6b34; margin-top: 12px; font-weight: 500; }
+  button { width: 100%; padding: 18px; font-size: 16px; font-weight: 600;
+    background: #0071e3; color: #fff; border: none; border-radius: 10px;
+    cursor: pointer; margin-top: 24px; transition: background 0.15s; }
+  button:hover:not(:disabled) { background: #0077ed; }
+  button:disabled { background: #b0b0b5; cursor: not-allowed; }
+  .status { margin-top: 24px; padding: 20px; border-radius: 12px;
+    font-size: 15px; display: none; line-height: 1.6; }
+  .status.show { display: block; }
+  .status.info { background: #e8f4fd; color: #0a5a96; }
+  .status.success { background: #e6f4ea; color: #1b6b34; }
+  .status.error { background: #fdecea; color: #a02420; }
+  a.download-btn { display: inline-block; padding: 16px 32px; background: #1b6b34;
+    color: #fff; text-decoration: none; border-radius: 10px; font-weight: 600;
+    margin-top: 12px; font-size: 15px; }
+  a.download-btn:hover { background: #155a28; }
+  .spinner { display: inline-block; width: 18px; height: 18px;
+    border: 2px solid #0a5a96; border-top-color: transparent; border-radius: 50%;
+    animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Генератор отчётов</h1>
+  <p class="subtitle">Загрузите файл протокола — получите готовый отчёт в .docx</p>
+
+  <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+    <input type="file" id="fileInput" accept=".docx,.txt" onchange="handleFile(this.files[0])">
+    <div class="drop-icon">📄</div>
+    <div class="drop-text" id="dropText">Перетащите файл или нажмите для выбора</div>
+    <div class="drop-hint">Поддерживаются .docx и .txt</div>
+    <div class="file-info" id="fileInfo"></div>
+  </div>
+
+  <button id="submitBtn" onclick="generate()" disabled>Сгенерировать отчёт</button>
+
+  <div id="status" class="status"></div>
+</div>
+
+<script>
+const FUNCTION_URL = 'https://functions.yandexcloud.net/d4esv7jn2cuhj7o0f9jmp';
+let selectedFile = null;
+
+const dropZone = document.getElementById('dropZone');
+const fileInfo = document.getElementById('fileInfo');
+const dropText = document.getElementById('dropText');
+const submitBtn = document.getElementById('submitBtn');
+const status = document.getElementById('status');
+
+['dragenter', 'dragover'].forEach(evt =>
+  dropZone.addEventListener(evt, e => {
+    e.preventDefault(); dropZone.classList.add('dragover');
+  })
+);
+['dragleave', 'drop'].forEach(evt =>
+  dropZone.addEventListener(evt, e => {
+    e.preventDefault(); dropZone.classList.remove('dragover');
+  })
+);
+dropZone.addEventListener('drop', e => {
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+
+function handleFile(file) {
+  if (!file) return;
+  const ok = file.name.endsWith('.docx') || file.name.endsWith('.txt');
+  if (!ok) {
+    status.className = 'status show error';
+    status.textContent = 'Поддерживаются только .docx и .txt';
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    status.className = 'status show error';
+    status.textContent = 'Файл слишком большой (максимум 5 МБ)';
+    return;
+  }
+
+  selectedFile = file;
+  dropZone.classList.add('has-file');
+  dropText.textContent = 'Файл выбран:';
+  fileInfo.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' КБ)';
+  submitBtn.disabled = false;
+  status.className = 'status';
+}
+
+async function generate() {
+  if (!selectedFile) return;
+
+  submitBtn.disabled = true;
+  status.className = 'status show info';
+  status.innerHTML = '<span class="spinner"></span>Анализирую протокол и генерирую документ... Это займёт 30–90 секунд.';
+
+  try {
+    const content = await readFileAsBase64(selectedFile);
+
+    const response = await fetch(FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: selectedFile.name,
+        content_base64: content
+      })
+    });
+
+    const result = await response.json();
+
+    if (result.status === 'success' && result.download_url) {
+      status.className = 'status show success';
+      status.innerHTML = '✅ Отчёт готов!<br><a class="download-btn" href="' + result.download_url + '" target="_blank">⬇ Скачать .docx</a>';
+    } else {
+      status.className = 'status show error';
+      status.textContent = 'Ошибка: ' + (result.error || JSON.stringify(result));
+    }
+  } catch (e) {
+    status.className = 'status show error';
+    status.textContent = 'Ошибка запроса: ' + e.message;
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+</script>
+</body>
+</html>
